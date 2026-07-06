@@ -175,10 +175,12 @@ struct EntryEditorView: View {
             .focused($bodyFocused)
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
+                    // Match the caret's real origin: the 8pt wrapper padding plus
+                    // NSTextView's 5pt line fragment padding, no extra vertical.
                     Text(type.placeholder)
                         .font(.system(size: 15))
                         .foregroundStyle(.tertiary)
-                        .padding(.top, 16).padding(.leading, 13)
+                        .padding(.top, 8).padding(.leading, 13)
                         .allowsHitTesting(false)
                 }
             }
