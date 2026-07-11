@@ -29,11 +29,10 @@ struct EntryEditorView: View {
     @State private var newlyImported: [String] = []
     @FocusState private var bodyFocused: Bool
 
-    /// For a locked entry, pass the decrypted content in; fields stay empty otherwise.
     init(entry: JournalEntry?, decrypted: (title: String, text: String)? = nil) {
         self.existing = entry
-        let t = entry?.type ?? .general
-        _type = State(initialValue: t)
+        let initialType = entry?.type ?? .general
+        _type = State(initialValue: initialType)
         _date = State(initialValue: entry?.date ?? Date())
         _title = State(initialValue: decrypted?.title ?? entry?.title ?? "")
         _text = State(initialValue: decrypted?.text ?? entry?.text ?? "")
@@ -43,7 +42,7 @@ struct EntryEditorView: View {
         _mood = State(initialValue: entry?.mood)
         _photos = State(initialValue: entry?.photos ?? [])
         _wantsLock = State(initialValue: entry?.isLocked ?? false)
-        _prompt = State(initialValue: WritingPrompts.random(for: t))
+        _prompt = State(initialValue: WritingPrompts.random(for: initialType))
         _showLocation = State(initialValue: !(entry?.location ?? "").isEmpty)
         _showWorkout = State(initialValue: !(entry?.workout ?? "").isEmpty)
         _showBook = State(initialValue: !(entry?.book ?? "").isEmpty)
@@ -60,26 +59,27 @@ struct EntryEditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            typeChips
-            promptBar
-            TextField("Title (optional)", text: $title)
-                .textFieldStyle(.plain)
-                .font(.title2.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(fieldBackground)
-            editorBody
-            detailChips
-            detailFields
-            photoStrip
-            footer
+        ZStack {
+            JournalTheme.canvas.ignoresSafeArea()
+            VStack(spacing: 0) {
+                editorHeader
+                ScrollView {
+                    VStack(spacing: 14) {
+                        typeSelector
+                        promptCard
+                        writingPaper
+                        attachmentBar
+                        detailsCard
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 18)
+                }
+                .scrollIndicators(.hidden)
+            }
         }
-        .padding(20)
-        .frame(minWidth: 660, minHeight: 620)
+        .frame(minWidth: 700, minHeight: 690)
         .onAppear { bodyFocused = true }
-        .onChange(of: type) { newType in
+        .onChange(of: type) { _, newType in
             prompt = WritingPrompts.random(for: newType)
         }
         .confirmationDialog("Delete this entry?", isPresented: $confirmingDelete) {
@@ -93,41 +93,102 @@ struct EntryEditorView: View {
         }
         .sheet(isPresented: $passcodeSetup) {
             PasscodeSettingsView()
+                .environmentObject(store)
                 .onDisappear { wantsLock = store.hasPasscode && store.isUnlocked && wantsLock }
         }
         .sheet(isPresented: $unlockPrompt) {
             UnlockView { }
+                .environmentObject(store)
         }
     }
 
-    // MARK: Sections
+    // MARK: - Header
 
-    private var header: some View {
-        HStack {
-            Text(existing == nil ? "New Entry" : "Edit Entry")
-                .font(.title3.weight(.semibold))
+    private var editorHeader: some View {
+        HStack(spacing: 12) {
+            Button(action: cancel) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(JournalIconButtonStyle(size: 34))
+            .keyboardShortcut(.cancelAction)
+            .help("Cancel")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(existing == nil ? "New Entry" : "Edit Entry")
+                    .font(.headline)
+                Text(type.label)
+                    .font(.caption)
+                    .foregroundStyle(type.color)
+            }
+
             Spacer()
-            DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+
+            DatePicker("Entry date", selection: $date, displayedComponents: [.date, .hourAndMinute])
                 .labelsHidden()
                 .datePickerStyle(.compact)
+                .fixedSize()
+
+            Button {
+                toggleLockIntent()
+            } label: {
+                Image(systemName: wantsLock ? "lock.fill" : "lock.open")
+            }
+            .buttonStyle(JournalIconButtonStyle(isSelected: wantsLock, size: 34))
+            .help(wantsLock ? "This entry will stay private" : "Lock this entry")
+
+            if existing != nil {
+                Menu {
+                    Button("Delete Entry", systemImage: "trash", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 34, height: 34)
+                        .background(JournalTheme.surfaceRaised)
+                        .clipShape(Circle())
+                        .overlay { Circle().stroke(JournalTheme.stroke) }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions")
+            }
+
+            Button("Done", action: save)
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .tint(JournalTheme.accent)
+                .controlSize(.large)
+                .disabled(!canSave)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(JournalTheme.stroke).frame(height: 1)
         }
     }
 
-    private var typeChips: some View {
+    // MARK: - Writing surface
+
+    private var typeSelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(EntryType.allCases) { t in
+            HStack(spacing: 7) {
+                ForEach(EntryType.allCases) { candidate in
                     Button {
-                        type = t
+                        type = candidate
                     } label: {
-                        Label(t.label, systemImage: t.icon)
-                            .font(.callout.weight(type == t ? .bold : .regular))
+                        Label(candidate.label, systemImage: candidate.icon)
+                            .font(.caption.weight(.semibold))
                             .padding(.horizontal, 11)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule().fill(type == t ? t.color.opacity(0.2) : Color.primary.opacity(0.05))
-                            )
-                            .foregroundStyle(type == t ? t.color : .primary)
+                            .padding(.vertical, 7)
+                            .foregroundStyle(type == candidate ? candidate.color : Color.secondary)
+                            .background(type == candidate ? candidate.color.opacity(0.14) : JournalTheme.surfaceRaised)
+                            .clipShape(Capsule())
+                            .overlay {
+                                Capsule().stroke(type == candidate ? candidate.color.opacity(0.24) : JournalTheme.stroke)
+                            }
                     }
                     .buttonStyle(.plain)
                 }
@@ -135,218 +196,296 @@ struct EntryEditorView: View {
         }
     }
 
-    private var promptBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lightbulb")
-                .foregroundStyle(type.color)
-            Text(prompt)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer()
+    private var promptCard: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(type.color.opacity(0.16))
+                    .frame(width: 32, height: 32)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(type.color)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("REFLECTION PROMPT")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(.tertiary)
+                Text(prompt)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
             Button("Use") {
                 title = prompt
                 bodyFocused = true
             }
-            .font(.callout)
+            .buttonStyle(.borderless)
             Button {
                 prompt = WritingPrompts.random(for: type, excluding: prompt)
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
+            .buttonStyle(JournalIconButtonStyle(size: 30))
             .help("Another prompt")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(type.color.opacity(0.08))
-        )
-    }
-
-    private var editorBody: some View {
-        TextEditor(text: $text)
-            .font(.system(size: 15))
-            .lineSpacing(3)
-            .scrollContentBackground(.hidden)
-            .padding(8)
-            .background(fieldBackground)
-            .frame(minHeight: 220)
-            .focused($bodyFocused)
-            .overlay(alignment: .topLeading) {
-                if text.isEmpty {
-                    // Match the caret's real origin: the 8pt wrapper padding plus
-                    // NSTextView's 5pt line fragment padding, no extra vertical.
-                    Text(type.placeholder)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 8).padding(.leading, 13)
-                        .allowsHitTesting(false)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if wordCount > 0 {
-                    Text("\(wordCount) words")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(6)
-                }
-            }
-    }
-
-    private var detailChips: some View {
-        HStack(spacing: 6) {
-            detailChip("mappin.and.ellipse", "Location", $showLocation) { location = "" }
-            detailChip("figure.run", "Workout", $showWorkout) { workout = "" }
-            detailChip("book", "Book", $showBook) { book = "" }
-            detailChip("face.smiling", "Mood", $showMood) { mood = nil }
-            Button {
-                importPhotos()
-            } label: {
-                Label("Photos", systemImage: "photo.on.rectangle.angled")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.primary.opacity(0.05)))
-            }
-            .buttonStyle(.plain)
-            Spacer()
+        .padding(11)
+        .background(type.color.opacity(0.075))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(type.color.opacity(0.13))
         }
     }
 
-    private func detailChip(_ icon: String, _ label: String, _ flag: Binding<Bool>,
-                            onDisable: @escaping () -> Void) -> some View {
-        Button {
-            flag.wrappedValue.toggle()
-            if !flag.wrappedValue { onDisable() }
-        } label: {
+    private var writingPaper: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                Text(date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, photos.isEmpty ? 2 : 12)
+
+            if !photos.isEmpty {
+                editorPhotoGrid
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 14)
+            }
+
+            TextField("Title", text: $title)
+                .textFieldStyle(.plain)
+                .font(.system(size: 26, weight: .bold))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+
+            Rectangle()
+                .fill(JournalTheme.stroke)
+                .frame(height: 1)
+                .padding(.horizontal, 18)
+
+            TextEditor(text: $text)
+                .font(.system(size: 16))
+                .lineSpacing(5)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .frame(minHeight: 285)
+                .focused($bodyFocused)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(type.placeholder)
+                            .font(.system(size: 16))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 18)
+                            .padding(.leading, 18)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            HStack {
+                if wantsLock {
+                    Label("Private entry", systemImage: "lock.fill")
+                        .foregroundStyle(JournalTheme.accent)
+                }
+                Spacer()
+                Text("\(wordCount) word\(wordCount == 1 ? "" : "s")")
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
+        }
+        .journalCard(radius: 22, shadow: 0.08)
+    }
+
+    @ViewBuilder
+    private var editorPhotoGrid: some View {
+        if photos.count == 1 {
+            editorPhoto(photos[0])
+                .frame(maxWidth: .infinity)
+                .frame(height: 235)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        } else {
+            let columns = [
+                GridItem(.flexible(), spacing: 4),
+                GridItem(.flexible(), spacing: 4),
+                GridItem(.flexible(), spacing: 4),
+            ]
+            LazyVGrid(columns: columns, spacing: 4) {
+                ForEach(photos, id: \.self) { name in
+                    editorPhoto(name)
+                        .frame(height: 125)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private func editorPhoto(_ name: String) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image = NSImage(contentsOf: store.photoURL(name)) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        JournalTheme.surfaceMuted
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .clipped()
+
+            Button {
+                photos.removeAll { $0 == name }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 24, height: 24)
+                    .background(.regularMaterial)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(7)
+            .help("Remove photo")
+        }
+    }
+
+    // MARK: - Attachments
+
+    private var attachmentBar: some View {
+        HStack(spacing: 8) {
+            attachmentButton("mappin.and.ellipse", "Location", isOn: showLocation) {
+                showLocation.toggle()
+                if !showLocation { location = "" }
+            }
+            attachmentButton("figure.run", "Workout", isOn: showWorkout) {
+                showWorkout.toggle()
+                if !showWorkout { workout = "" }
+            }
+            attachmentButton("book", "Book", isOn: showBook) {
+                showBook.toggle()
+                if !showBook { book = "" }
+            }
+            attachmentButton("face.smiling", "Mood", isOn: showMood) {
+                showMood.toggle()
+                if !showMood { mood = nil }
+            }
+            attachmentButton("photo.on.rectangle.angled", "Photos", isOn: !photos.isEmpty) {
+                importPhotos()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(JournalTheme.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(JournalTheme.stroke)
+        }
+    }
+
+    private func attachmentButton(_ icon: String, _ label: String, isOn: Bool,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             Label(label, systemImage: icon)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule().fill(flag.wrappedValue ? Color.teal.opacity(0.18) : Color.primary.opacity(0.05))
-                )
-                .foregroundStyle(flag.wrappedValue ? .teal : .primary)
+                .padding(.vertical, 7)
+                .foregroundStyle(isOn ? JournalTheme.accent : Color.secondary)
+                .background(isOn ? JournalTheme.accentSoft : Color.clear)
+                .clipShape(Capsule())
         }
         .buttonStyle(.plain)
     }
 
     @ViewBuilder
-    private var detailFields: some View {
+    private var detailsCard: some View {
         if showLocation || showWorkout || showBook || showMood {
-            VStack(spacing: 6) {
+            VStack(spacing: 10) {
                 if showLocation {
-                    detailField("mappin.and.ellipse", "Where are you? (city, place)", $location)
+                    detailField("mappin.and.ellipse", "Where are you?", $location)
                 }
                 if showWorkout {
-                    detailField("figure.run", "Workout (e.g. Badminton, 90 min)", $workout)
+                    detailField("figure.run", "Workout details", $workout)
                 }
                 if showBook {
-                    detailField("book", "Book (title, author, pages)", $book)
+                    detailField("book", "Book title, author, or pages", $book)
                 }
                 if showMood {
-                    HStack(spacing: 8) {
-                        Image(systemName: "face.smiling").foregroundStyle(.secondary).frame(width: 18)
-                        ForEach(Mood.range, id: \.self) { v in
-                            Button {
-                                mood = v
-                            } label: {
-                                Text(Mood.emoji(for: v))
-                                    .font(.system(size: mood == v ? 24 : 18))
-                                    .opacity(mood == v || mood == nil ? 1 : 0.4)
-                            }
-                            .buttonStyle(.plain)
-                            .help(Mood.label(for: v))
-                        }
-                        if let mood {
-                            Text(Mood.label(for: mood))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(fieldBackground)
+                    moodPicker
                 }
             }
+            .padding(14)
+            .journalCard(radius: 18, shadow: 0.035)
         }
     }
 
     private func detailField(_ icon: String, _ placeholder: String, _ value: Binding<String>) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(JournalTheme.accent)
+                .frame(width: 20)
             TextField(placeholder, text: value)
                 .textFieldStyle(.plain)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(fieldBackground)
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(JournalTheme.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(JournalTheme.stroke)
+        }
     }
 
-    @ViewBuilder
-    private var photoStrip: some View {
-        if !photos.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(photos, id: \.self) { name in
-                        ZStack(alignment: .topTrailing) {
-                            if let img = NSImage(contentsOf: store.photoURL(name)) {
-                                Image(nsImage: img)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 64, height: 64)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            Button {
-                                photos.removeAll { $0 == name }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.white, .black.opacity(0.6))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(2)
-                        }
-                    }
+    private var moodPicker: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "face.smiling")
+                .foregroundStyle(JournalTheme.accent)
+                .frame(width: 20)
+            ForEach(Mood.range, id: \.self) { value in
+                Button {
+                    mood = value
+                } label: {
+                    Text(Mood.emoji(for: value))
+                        .font(.system(size: mood == value ? 23 : 18))
+                        .opacity(mood == nil || mood == value ? 1 : 0.4)
+                        .frame(width: 30, height: 30)
+                        .background(mood == value ? JournalTheme.accentSoft : Color.clear)
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .help(Mood.label(for: value))
+                .accessibilityLabel(Mood.label(for: value))
             }
-            .frame(height: 68)
+            if let mood {
+                Text(Mood.label(for: mood))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(JournalTheme.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(JournalTheme.stroke)
         }
     }
 
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button {
-                toggleLockIntent()
-            } label: {
-                Label(wantsLock ? "Locked" : "Lock",
-                      systemImage: wantsLock ? "lock.fill" : "lock.open")
-                    .foregroundStyle(wantsLock ? .indigo : .secondary)
-            }
-            .help(wantsLock
-                  ? "This entry will be encrypted with your journal passcode. Photos stay unencrypted."
-                  : "Encrypt this entry with your journal passcode")
-
-            if existing != nil {
-                Button("Delete", role: .destructive) { confirmingDelete = true }
-            }
-            Spacer()
-            Button("Cancel") { cancel() }
-                .keyboardShortcut(.cancelAction)
-            Button("Save") { save() }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSave)
-        }
-    }
-
-    private var fieldBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor))
-    }
-
-    // MARK: Actions
+    // MARK: - Actions
 
     private func importPhotos() {
         let panel = NSOpenPanel()
@@ -383,8 +522,6 @@ struct EntryEditorView: View {
     }
 
     private func save() {
-        // Locking needs a live key; fall back to saving unlocked if the
-        // passcode flow was dismissed without finishing.
         let lockable = wantsLock && store.hasPasscode && store.isUnlocked
 
         var entry = existing ?? JournalEntry()
@@ -395,7 +532,6 @@ struct EntryEditorView: View {
         entry.book = book.isEmpty ? nil : book
         entry.mood = showMood ? mood : nil
 
-        // Photo files removed in this session get cleaned off disk.
         let removed = Set(existing?.photos ?? []).subtracting(photos)
         for name in removed { store.removePhotoFile(name) }
         entry.photos = photos
@@ -404,10 +540,9 @@ struct EntryEditorView: View {
             if lockable {
                 entry.title = ""
                 entry.text = ""
-                store.update(entry)          // persist details first
+                store.update(entry)
                 store.updateLocked(entry, title: title, text: text)
             } else if store.isUnlocked {
-                // Lock switched off: restore plaintext.
                 entry.title = title
                 entry.text = text
                 entry.isLocked = false
@@ -424,9 +559,7 @@ struct EntryEditorView: View {
             } else {
                 store.update(entry)
             }
-            if lockable {
-                store.lockEntry(id: entry.id)
-            }
+            if lockable { store.lockEntry(id: entry.id) }
         }
         dismiss()
     }

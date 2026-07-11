@@ -76,6 +76,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
     var book: String?
     var mood: Int?
     var photos: [String]
+    var isBookmarked: Bool
     // v2 lock: when locked, title/text are emptied and cipher holds the
     // AES-GCM sealed JSON of {title, text}. Photos stay unencrypted (noted
     // in the UI); their file names remain listed.
@@ -95,6 +96,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         book: String? = nil,
         mood: Int? = nil,
         photos: [String] = [],
+        isBookmarked: Bool = false,
         isLocked: Bool = false,
         cipher: String? = nil
     ) {
@@ -110,6 +112,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         self.book = book
         self.mood = mood
         self.photos = photos
+        self.isBookmarked = isBookmarked
         self.isLocked = isLocked
         self.cipher = cipher
     }
@@ -129,6 +132,7 @@ struct JournalEntry: Identifiable, Codable, Equatable {
         book = try c.decodeIfPresent(String.self, forKey: .book)
         mood = try c.decodeIfPresent(Int.self, forKey: .mood)
         photos = try c.decodeIfPresent([String].self, forKey: .photos) ?? []
+        isBookmarked = try c.decodeIfPresent(Bool.self, forKey: .isBookmarked) ?? false
         isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         cipher = try c.decodeIfPresent(String.self, forKey: .cipher)
     }
@@ -237,6 +241,13 @@ final class JournalStore: ObservableObject {
             }
         }
         entries.removeAll { $0.id == id }
+        sortAndSave()
+    }
+
+    func toggleBookmark(id: UUID) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[index].isBookmarked.toggle()
+        entries[index].modifiedAt = Date().roundedToSecond
         sortAndSave()
     }
 
@@ -490,7 +501,7 @@ final class JournalStore: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
-            let data = try encoder.encode(StoreFile(version: 2, entries: entries))
+            let data = try encoder.encode(StoreFile(version: 3, entries: entries))
             try data.write(to: fileURL, options: .atomic)
         } catch {
             NSLog("Daybook: failed to save entries: \(error)")

@@ -4,11 +4,11 @@ A lightweight native macOS journaling app in the style of Apple's iPhone Journal
 
 ## Features
 
-- Card feed grouped by month, newest first, with search and type filters
+- Photo-led card feed grouped by month, newest first, with search, bookmarks, date browsing, and rich filters
 - Six entry types, each with its own icon, color, and writing prompts: General (teal), Reflection (orange), Dream (indigo), Fitness (green), Travel (blue), Reading (brown)
 - **Locked entries**: set one journal passcode, lock any entry individually. Locked entries are encrypted on disk with AES-GCM (key derived via PBKDF2, 200k rounds; the passcode itself is never stored). No passcode, no plaintext. Photos attached to locked entries stay unencrypted; only title and body are sealed.
 - Entry details: attach photos, a location, a workout, a book, and a 1 to 7 state-of-mind rating; each shows as chips on the card
-- A roomier editor: per-type prompts with a shuffle button, live word count, editable date and time
+- A paper-like editor: per-type prompts with a shuffle button, live word count, editable date and time, and an attachment tray
 - **Insights**: current and best streaks, entries this month, total words, a 15-week activity heatmap, type breakdown, and weekday rhythm
 - Cmd+N for a new entry; Return saves, Escape cancels; closing the window quits
 
@@ -26,7 +26,7 @@ If a file is ever unreadable, Daybook backs it up instead of overwriting it. Ver
 
 ```
 ./build.sh          # run tests, build build/Daybook.app
-./build.sh test     # store tests only (45 of them)
+./build.sh test     # store tests only (48 of them)
 ./build.sh install  # build and copy to /Applications
 ```
 

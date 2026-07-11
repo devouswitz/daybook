@@ -1,43 +1,43 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Type styling
-
-extension EntryType {
-    var color: Color {
-        switch self {
-        case .general: return .teal
-        case .reflection: return .orange
-        case .dream: return .indigo
-        case .fitness: return .green
-        case .travel: return .blue
-        case .reading: return .brown
-        }
-    }
-}
-
-// MARK: - Filter
-
 enum EntryFilter: Hashable {
     case all
+    case bookmarked
+    case photos
+    case locations
     case type(EntryType)
 
     var label: String {
         switch self {
         case .all: return "All Entries"
-        case .type(let t): return t.label
+        case .bookmarked: return "Bookmarked"
+        case .photos: return "Photos"
+        case .locations: return "Places"
+        case .type(let type): return type.label
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all: return "line.3.horizontal.decrease"
+        case .bookmarked: return "bookmark.fill"
+        case .photos: return "photo.on.rectangle.angled"
+        case .locations: return "mappin.and.ellipse"
+        case .type(let type): return type.icon
         }
     }
 
     func matches(_ entry: JournalEntry) -> Bool {
         switch self {
         case .all: return true
-        case .type(let t): return entry.type == t
+        case .bookmarked: return entry.isBookmarked
+        case .photos: return !entry.photos.isEmpty
+        case .locations: return !(entry.location ?? "").isEmpty
+        case .type(let type): return entry.type == type
         }
     }
 }
-
-// MARK: - Editor routing
 
 struct EditorContext: Identifiable {
     let id = UUID()
@@ -45,23 +45,28 @@ struct EditorContext: Identifiable {
     var decrypted: (title: String, text: String)?
 }
 
-// MARK: - Content view
-
 struct ContentView: View {
     @EnvironmentObject private var store: JournalStore
 
     @State private var searchText = ""
     @State private var filter: EntryFilter = .all
+    @State private var selectedDay: Date?
     @State private var editorContext: EditorContext?
     @State private var pendingDelete: JournalEntry?
     @State private var unlockTarget: JournalEntry?
     @State private var showInsights = false
     @State private var showSettings = false
+    @State private var showCalendar = false
+
+    private let calendar = Calendar.current
 
     private var visibleEntries: [JournalEntry] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return store.entries.filter { entry in
             guard filter.matches(entry) else { return false }
+            if let selectedDay, !calendar.isDate(entry.date, inSameDayAs: selectedDay) {
+                return false
+            }
             guard !query.isEmpty else { return true }
             guard !entry.isLocked else { return false }
             let haystack = [entry.title, entry.text, entry.location ?? "",
@@ -72,7 +77,6 @@ struct ContentView: View {
     }
 
     private var monthGroups: [(month: Date, label: String, entries: [JournalEntry])] {
-        let calendar = Calendar.current
         let grouped = Dictionary(grouping: visibleEntries) { entry in
             calendar.date(from: calendar.dateComponents([.year, .month], from: entry.date)) ?? entry.date
         }
@@ -84,19 +88,21 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                header
-                Divider().opacity(0.4)
-                if visibleEntries.isEmpty {
-                    emptyState
-                } else {
-                    feed
+        GeometryReader { proxy in
+            let compact = proxy.size.width < 560
+            ZStack(alignment: compact ? .bottom : .bottomTrailing) {
+                backgroundLayer
+                VStack(spacing: 0) {
+                    header
+                    if visibleEntries.isEmpty {
+                        emptyState
+                    } else {
+                        feed
+                    }
                 }
+                newEntryButton(compact: compact)
             }
-            newEntryButton
         }
-        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $editorContext) { context in
             EntryEditorView(entry: context.entry, decrypted: context.decrypted)
                 .environmentObject(store)
@@ -121,9 +127,7 @@ struct ContentView: View {
             )
         ) {
             Button("Delete", role: .destructive) {
-                if let entry = pendingDelete {
-                    store.delete(id: entry.id)
-                }
+                if let entry = pendingDelete { store.delete(id: entry.id) }
                 pendingDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
@@ -135,145 +139,23 @@ struct ContentView: View {
         }
     }
 
+    private var backgroundLayer: some View {
+        ZStack {
+            JournalTheme.canvas
+            RadialGradient(
+                colors: [JournalTheme.accent.opacity(0.075), .clear],
+                center: .topTrailing,
+                startRadius: 20,
+                endRadius: 440
+            )
+        }
+        .ignoresSafeArea()
+    }
+
     private func openLocked(_ entry: JournalEntry) {
         guard let content = store.decryptedContent(of: entry) else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
             editorContext = EditorContext(entry: entry, decrypted: content)
-        }
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Daybook")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                Spacer()
-                statsBadge
-            }
-            HStack(spacing: 8) {
-                searchField
-                filterMenu
-                iconButton("chart.bar.fill", help: "Insights") { showInsights = true }
-                if store.hasPasscode && store.isUnlocked {
-                    iconButton("lock.open.fill", help: "Lock journal now") { store.relock() }
-                }
-                iconButton("gearshape.fill", help: store.hasPasscode ? "Change passcode" : "Set a passcode") {
-                    showSettings = true
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 38)
-        .padding(.bottom, 14)
-    }
-
-    private func iconButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor))
-                )
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
-
-    private var statsBadge: some View {
-        HStack(spacing: 10) {
-            if store.streak >= 2 {
-                Label("\(store.streak) day streak", systemImage: "flame.fill")
-                    .foregroundStyle(.orange)
-            }
-            Text("\(store.entryCount) \(store.entryCount == 1 ? "entry" : "entries")")
-                .foregroundStyle(.secondary)
-        }
-        .font(.callout.weight(.medium))
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search", text: $searchText)
-                .textFieldStyle(.plain)
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-    }
-
-    private var filterMenu: some View {
-        Menu {
-            Picker("Filter", selection: $filter) {
-                Label("All Entries", systemImage: "tray.full").tag(EntryFilter.all)
-                Divider()
-                ForEach(EntryType.allCases) { type in
-                    Label(type.label, systemImage: type.icon).tag(EntryFilter.type(type))
-                }
-            }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "line.3.horizontal.decrease.circle\(filter == .all ? "" : ".fill")")
-                Text(filter.label)
-            }
-            .font(.callout.weight(.medium))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-    }
-
-    // MARK: Feed
-
-    private var feed: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(monthGroups, id: \.month) { group in
-                    Text(group.label)
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 10)
-                        .padding(.leading, 4)
-                    ForEach(group.entries) { entry in
-                        EntryCard(entry: entry)
-                            .environmentObject(store)
-                            .onTapGesture { open(entry) }
-                            .contextMenu {
-                                Button("Edit") { open(entry) }
-                                Button("Delete", role: .destructive) {
-                                    pendingDelete = entry
-                                }
-                            }
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 4)
-            .padding(.bottom, 90)
         }
     }
 
@@ -289,68 +171,328 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Daybook")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                    Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                habitBadge
+            }
+
+            HStack(spacing: 8) {
+                searchField
+                filterMenu
+                calendarButton
+                toolbarButton("chart.bar.fill", help: "Insights") {
+                    showInsights = true
+                }
+                if store.hasPasscode && store.isUnlocked {
+                    toolbarButton("lock.open.fill", help: "Lock journal now") {
+                        store.relock()
+                    }
+                }
+                toolbarButton("gearshape.fill", help: store.hasPasscode ? "Change passcode" : "Set a passcode") {
+                    showSettings = true
+                }
+            }
+
+            if let selectedDay {
+                HStack(spacing: 7) {
+                    Image(systemName: "calendar")
+                        .foregroundStyle(JournalTheme.accent)
+                    Text("Showing \(selectedDay.formatted(date: .long, time: .omitted))")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button {
+                        self.selectedDay = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show all dates")
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(JournalTheme.accentSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(JournalTheme.accent.opacity(0.15))
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 38)
+        .padding(.bottom, 16)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(JournalTheme.stroke).frame(height: 1)
+        }
+    }
+
+    private var habitBadge: some View {
+        HStack(spacing: 8) {
+            if store.streak > 0 {
+                Image(systemName: "flame.fill")
+                    .foregroundStyle(.orange)
+                Text("\(store.streak) day\(store.streak == 1 ? "" : "s")")
+                    .foregroundStyle(.primary)
+            } else {
+                Image(systemName: "book.closed.fill")
+                    .foregroundStyle(JournalTheme.accent)
+                Text("\(store.entryCount)")
+            }
+        }
+        .font(.caption.weight(.bold))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .background(JournalTheme.surfaceRaised)
+        .clipShape(Capsule())
+        .overlay { Capsule().stroke(JournalTheme.stroke) }
+        .help("\(store.entryCount) total entries")
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search your journal", text: $searchText)
+                .textFieldStyle(.plain)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 38)
+        .background(JournalTheme.surfaceRaised)
+        .clipShape(Capsule())
+        .overlay { Capsule().stroke(JournalTheme.stroke) }
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Picker("Filter", selection: $filter) {
+                Label("All Entries", systemImage: "tray.full").tag(EntryFilter.all)
+                Label("Bookmarked", systemImage: "bookmark.fill").tag(EntryFilter.bookmarked)
+                Label("Photos", systemImage: "photo.on.rectangle.angled").tag(EntryFilter.photos)
+                Label("Places", systemImage: "mappin.and.ellipse").tag(EntryFilter.locations)
+                Divider()
+                ForEach(EntryType.allCases) { type in
+                    Label(type.label, systemImage: type.icon).tag(EntryFilter.type(type))
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: filter == .all ? "line.3.horizontal.decrease" : filter.systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(filter == .all ? Color.primary : JournalTheme.accent)
+                .frame(width: 36, height: 36)
+                .background(filter == .all ? JournalTheme.surfaceRaised : JournalTheme.accentSoft)
+                .clipShape(Circle())
+                .overlay {
+                    Circle().stroke(filter == .all ? JournalTheme.stroke : JournalTheme.accent.opacity(0.22))
+                }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(filter == .all ? "Filter entries" : "Filtered by \(filter.label)")
+    }
+
+    private var calendarButton: some View {
+        toolbarButton(selectedDay == nil ? "calendar" : "calendar.badge.checkmark", help: "Choose a date",
+                      isSelected: selectedDay != nil) {
+            showCalendar.toggle()
+        }
+        .popover(isPresented: $showCalendar, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Browse by date")
+                    .font(.headline)
+                DatePicker(
+                    "Date",
+                    selection: Binding(
+                        get: { selectedDay ?? Date() },
+                        set: { selectedDay = $0 }
+                    ),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                if selectedDay != nil {
+                    Button("Show all dates") {
+                        selectedDay = nil
+                        showCalendar = false
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(16)
+            .frame(width: 280)
+        }
+    }
+
+    private func toolbarButton(_ systemName: String, help: String, isSelected: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+        }
+        .buttonStyle(JournalIconButtonStyle(isSelected: isSelected))
+        .help(help)
+    }
+
+    // MARK: - Feed
+
+    private var feed: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                ForEach(monthGroups, id: \.month) { group in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(group.label.uppercased())
+                                .font(.caption.weight(.bold))
+                                .tracking(0.9)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(group.entries.count)")
+                                .font(.caption.monospacedDigit().weight(.medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 4)
+
+                        ForEach(group.entries) { entry in
+                            EntryCard(
+                                entry: entry,
+                                onOpen: { open(entry) },
+                                onBookmark: { store.toggleBookmark(id: entry.id) },
+                                onDelete: { pendingDelete = entry }
+                            )
+                            .environmentObject(store)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 106)
+        }
+        .scrollIndicators(.hidden)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 14) {
             Spacer()
-            Image(systemName: "book.closed.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.tertiary)
-            Text(searchText.isEmpty && filter == .all ? "Start your first entry" : "No matching entries")
-                .font(.title3.weight(.semibold))
-            Text(searchText.isEmpty && filter == .all
-                 ? "A few honest lines a day is plenty."
-                 : "Try a different search or filter.")
+            ZStack {
+                Circle()
+                    .fill(JournalTheme.accentSoft)
+                    .frame(width: 82, height: 82)
+                Image(systemName: emptyStateIcon)
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(JournalTheme.accent)
+            }
+            Text(emptyStateTitle)
+                .font(.title2.weight(.bold))
+            Text(emptyStateMessage)
+                .font(.body)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            if searchText.isEmpty && filter == .all && selectedDay == nil {
+                Button("Write your first entry") {
+                    editorContext = EditorContext(entry: nil, decrypted: nil)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(JournalTheme.accent)
+                .controlSize(.large)
+            }
             Spacer()
             Spacer()
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
-    // MARK: New entry button
+    private var emptyStateIcon: String {
+        if !searchText.isEmpty { return "magnifyingglass" }
+        if selectedDay != nil { return "calendar" }
+        if filter == .bookmarked { return "bookmark" }
+        return "book.closed"
+    }
 
-    private var newEntryButton: some View {
+    private var emptyStateTitle: String {
+        if !searchText.isEmpty { return "No matching entries" }
+        if selectedDay != nil { return "Nothing written that day" }
+        if filter == .bookmarked { return "No bookmarks yet" }
+        if filter != .all { return "No entries in this view" }
+        return "Start your journal"
+    }
+
+    private var emptyStateMessage: String {
+        if !searchText.isEmpty { return "Try a different word or clear your filters." }
+        if selectedDay != nil { return "Choose another date or return to all entries." }
+        if filter == .bookmarked { return "Bookmark the moments you want to revisit." }
+        if filter != .all { return "Choose a different filter to keep browsing." }
+        return "A few honest lines are enough. Capture one detail you want to remember."
+    }
+
+    private func newEntryButton(compact: Bool) -> some View {
         Button {
             editorContext = EditorContext(entry: nil, decrypted: nil)
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 23, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 54, height: 54)
-                .background(
-                    Circle().fill(
-                        LinearGradient(
-                            colors: [.indigo, .purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                )
-                .shadow(color: .indigo.opacity(0.4), radius: 10, y: 4)
+                .frame(width: 58, height: 58)
+                .background(JournalTheme.accent)
+                .clipShape(Circle())
+                .overlay { Circle().stroke(.white.opacity(0.22), lineWidth: 1) }
+                .shadow(color: JournalTheme.accent.opacity(0.38), radius: 16, y: 8)
         }
         .buttonStyle(.plain)
-        .padding(.bottom, 22)
+        .padding(.trailing, compact ? 0 : 25)
+        .padding(.bottom, compact ? 8 : 24)
         .help("New Entry (Cmd+N)")
+        .accessibilityLabel("New entry")
     }
 }
 
-// MARK: - Entry card
-
 struct EntryCard: View {
     @EnvironmentObject private var store: JournalStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let entry: JournalEntry
+    let onOpen: () -> Void
+    let onBookmark: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovering = false
 
     private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE, MMM d"
-        return f
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d"
+        return formatter
     }()
 
     private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
     }()
 
     private var previewText: String {
@@ -358,117 +500,139 @@ struct EntryCard: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: entry.isLocked ? "lock.fill" : entry.type.icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(entry.isLocked ? Color.secondary : entry.type.color)
-                .frame(width: 34, height: 34)
-                .background(
-                    Circle().fill(entry.isLocked
-                                  ? Color.primary.opacity(0.08)
-                                  : entry.type.color.opacity(0.14))
-                )
-                .padding(.top, 2)
+        VStack(alignment: .leading, spacing: 0) {
+            if !entry.photos.isEmpty && !entry.isLocked {
+                JournalPhotoCollage(names: entry.photos, height: entry.photos.count == 1 ? 210 : 220)
+                    .environmentObject(store)
+            }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.displayTitle)
-                    .font(.headline)
-                    .foregroundStyle(entry.isLocked ? .secondary : .primary)
-                    .lineLimit(1)
-
+            VStack(alignment: .leading, spacing: 10) {
                 if entry.isLocked {
-                    Text("Enter your passcode to read this entry.")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
-                } else if !previewText.isEmpty && previewText != entry.displayTitle {
-                    Text(previewText)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                    HStack(spacing: 9) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(JournalTheme.accent)
+                        Text("Private entry")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
-                if !entry.photos.isEmpty && !entry.isLocked {
-                    HStack(spacing: 6) {
-                        ForEach(entry.photos.prefix(3), id: \.self) { name in
-                            if let img = NSImage(contentsOf: store.photoURL(name)) {
-                                Image(nsImage: img)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 46, height: 46)
-                                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                            }
-                        }
-                        if entry.photos.count > 3 {
-                            Text("+\(entry.photos.count - 3)")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 46, height: 46)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .fill(Color.primary.opacity(0.06))
-                                )
-                        }
-                    }
-                    .padding(.top, 2)
+                Text(entry.displayTitle)
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(entry.isLocked ? Color.secondary : Color.primary)
+                    .lineLimit(2)
+
+                if entry.isLocked {
+                    Text("Unlock your journal to read this entry.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else if !previewText.isEmpty && previewText != entry.displayTitle {
+                    Text(previewText)
+                        .font(.system(size: 14.5))
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(3)
+                        .lineLimit(entry.photos.isEmpty ? 4 : 3)
                 }
 
                 detailChipsRow
 
-                HStack(spacing: 6) {
+                HStack(spacing: 7) {
+                    Label(entry.type.label, systemImage: entry.type.icon)
+                        .foregroundStyle(entry.type.color)
+                    Text("·")
+                        .foregroundStyle(.tertiary)
                     Text(Self.dateFormatter.string(from: entry.date))
                     Text("·")
+                        .foregroundStyle(.tertiary)
                     Text(Self.timeFormatter.string(from: entry.date))
-                    Text("·")
-                    Text(entry.type.label)
-                        .foregroundStyle(entry.type.color)
+                    Spacer(minLength: 4)
+                    Button(action: onBookmark) {
+                        Image(systemName: entry.isBookmarked ? "bookmark.fill" : "bookmark")
+                            .foregroundStyle(entry.isBookmarked ? JournalTheme.accent : Color.secondary)
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .help(entry.isBookmarked ? "Remove bookmark" : "Bookmark entry")
+
+                    Menu {
+                        Button("Edit", systemImage: "pencil", action: onOpen)
+                        Button(entry.isBookmarked ? "Remove Bookmark" : "Bookmark",
+                               systemImage: entry.isBookmarked ? "bookmark.slash" : "bookmark",
+                               action: onBookmark)
+                        Divider()
+                        Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 25, height: 24)
+                            .background(JournalTheme.surfaceMuted)
+                            .clipShape(Circle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Entry actions")
                 }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.tertiary)
-                .padding(.top, 2)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
+            .padding(16)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(JournalTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(isHovering ? JournalTheme.accent.opacity(0.24) : JournalTheme.stroke, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(isHovering ? 0.15 : 0.09), radius: isHovering ? 18 : 12, y: isHovering ? 9 : 5)
+        .offset(y: isHovering && !reduceMotion ? -2 : 0)
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering in isHovering = hovering }
+        .animation(.easeOut(duration: 0.18), value: isHovering)
+        .contextMenu {
+            Button("Edit", action: onOpen)
+            Button(entry.isBookmarked ? "Remove Bookmark" : "Bookmark", action: onBookmark)
+            Button("Delete", role: .destructive, action: onDelete)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Open entry", onOpen)
     }
 
     @ViewBuilder
     private var detailChipsRow: some View {
-        let chips = detailChips
+        let chips = Array(detailChips.prefix(3))
         if !chips.isEmpty {
             HStack(spacing: 6) {
                 ForEach(chips, id: \.1) { icon, label in
-                    HStack(spacing: 3) {
-                        if icon.isEmpty {
-                            Text(label).font(.caption)
-                        } else {
-                            Image(systemName: icon).font(.caption2)
-                            Text(label).font(.caption)
-                        }
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.primary.opacity(0.05)))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    Label(label, systemImage: icon)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(JournalTheme.surfaceMuted)
+                        .clipShape(Capsule())
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, 2)
         }
     }
 
     private var detailChips: [(String, String)] {
         var chips: [(String, String)] = []
-        if let l = entry.location, !l.isEmpty { chips.append(("mappin.and.ellipse", l)) }
-        if let w = entry.workout, !w.isEmpty { chips.append(("figure.run", w)) }
-        if let b = entry.book, !b.isEmpty { chips.append(("book", b)) }
-        if let m = entry.mood { chips.append(("", "\(Mood.emoji(for: m)) \(Mood.label(for: m))")) }
+        if let location = entry.location, !location.isEmpty {
+            chips.append(("mappin.and.ellipse", location))
+        }
+        if let workout = entry.workout, !workout.isEmpty {
+            chips.append(("figure.run", workout))
+        }
+        if let book = entry.book, !book.isEmpty {
+            chips.append(("book", book))
+        }
+        if let mood = entry.mood {
+            chips.append(("face.smiling", Mood.label(for: mood)))
+        }
         return chips
     }
 }
