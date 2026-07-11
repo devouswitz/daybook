@@ -103,11 +103,11 @@ let v1Store = JournalStore(directory: v1Dir)
 check(v1Store.entryCount == 1, "v1 file loads")
 let migrated = v1Store.entries[0]
 check(migrated.title == "Old entry" && !migrated.isLocked && migrated.photos.isEmpty
-      && migrated.mood == nil && migrated.location == nil,
-      "v1 entry gets v2 defaults")
+      && !migrated.isBookmarked && migrated.mood == nil && migrated.location == nil,
+      "v1 entry gets current defaults")
 v1Store.add(JournalEntry(title: "New", text: "post-migration write"))
 let v1Raw = try String(contentsOf: v1Store.fileURL, encoding: .utf8)
-check(v1Raw.contains("\"version\" : 2"), "migrated file saves as version 2")
+check(v1Raw.contains("\"version\" : 3"), "migrated file saves as version 3")
 
 // 9. v2 detail fields round-trip
 let d2 = tempDir.appendingPathComponent("v2fields")
@@ -120,6 +120,14 @@ let e2r = s2r.entries[0]
 check(e2r.workout == "Badminton, 90 min" && e2r.location == "Utrecht"
       && e2r.mood == 6 && e2r.photos == ["a.png"] && e2r.type == .fitness,
       "v2 fields round-trip")
+
+// Bookmark lifecycle
+let bookmarkedID = s2r.entries[0].id
+s2r.toggleBookmark(id: bookmarkedID)
+let bookmarkedReload = JournalStore(directory: d2)
+check(bookmarkedReload.entries[0].isBookmarked, "bookmark persists")
+bookmarkedReload.toggleBookmark(id: bookmarkedID)
+check(!JournalStore(directory: d2).entries[0].isBookmarked, "bookmark can be removed")
 
 // 10. Passcode + lock lifecycle
 let d3 = tempDir.appendingPathComponent("locks")
