@@ -137,24 +137,22 @@ struct InsightsView: View {
 
     private var activityCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Writing activity", subtitle: "The last 15 weeks", icon: "calendar.badge.clock")
-            HStack(alignment: .bottom) {
-                heatmap
+            sectionHeader("Writing activity", subtitle: "The last six months", icon: "calendar.badge.clock")
+            heatmap
+            HStack(spacing: 5) {
                 Spacer()
-                VStack(alignment: .trailing, spacing: 5) {
-                    Text("Less")
-                    HStack(spacing: 3) {
-                        ForEach(0..<4, id: \.self) { level in
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(heatColor(level))
-                                .frame(width: 10, height: 10)
-                        }
+                Text("Less")
+                HStack(spacing: 3) {
+                    ForEach(0..<4, id: \.self) { level in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(heatColor(level))
+                            .frame(width: 10, height: 10)
                     }
-                    Text("More")
                 }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.tertiary)
+                Text("More")
             }
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.tertiary)
         }
         .padding(16)
         .journalCard(radius: 18, shadow: 0.04)
@@ -244,23 +242,58 @@ struct InsightsView: View {
         }
     }
 
+    /// One flexible-width column per calendar week, so the grid always spans
+    /// the full card instead of piling fixed-size squares on the left. The
+    /// range starts on a week boundary, which makes each row a real weekday
+    /// and leaves the current week ragged on the right like a calendar.
     private var heatmap: some View {
-        let days = store.dailyCounts(days: 15 * 7)
+        let weeksToShow = 26
+        let today = calendar.startOfDay(for: Date())
+        let thisWeek = calendar.dateInterval(of: .weekOfYear, for: today)?.start ?? today
+        let firstDay = calendar.date(byAdding: .weekOfYear, value: -(weeksToShow - 1), to: thisWeek) ?? today
+        let dayCount = (calendar.dateComponents([.day], from: firstDay, to: today).day ?? 0) + 1
+        let days = store.dailyCounts(days: dayCount)
         let weeks = stride(from: 0, to: days.count, by: 7).map {
             Array(days[$0..<min($0 + 7, days.count)])
         }
-        return HStack(alignment: .top, spacing: 3) {
-            ForEach(0..<weeks.count, id: \.self) { week in
-                VStack(spacing: 3) {
-                    ForEach(0..<weeks[week].count, id: \.self) { day in
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(heatColor(min(weeks[week][day].count, 3)))
-                            .frame(width: 10, height: 10)
-                            .help("\(weeks[week][day].day.formatted(date: .abbreviated, time: .omitted)): \(weeks[week][day].count)")
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 3) {
+                ForEach(0..<weeks.count, id: \.self) { week in
+                    Text(monthLabel(weeks, week) ?? "")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            HStack(alignment: .top, spacing: 3) {
+                ForEach(0..<weeks.count, id: \.self) { week in
+                    VStack(spacing: 3) {
+                        ForEach(0..<7, id: \.self) { slot in
+                            if slot < weeks[week].count {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(heatColor(min(weeks[week][slot].count, 3)))
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .help("\(weeks[week][slot].day.formatted(date: .abbreviated, time: .omitted)): \(weeks[week][slot].count)")
+                            } else {
+                                Color.clear.aspectRatio(1, contentMode: .fit)
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
+    }
+
+    /// Label a column when it starts a new month; boundaries are weeks apart,
+    /// so the overflowing text never collides with its neighbour.
+    private func monthLabel(_ weeks: [[(day: Date, count: Int)]], _ week: Int) -> String? {
+        guard week > 0, let first = weeks[week].first, let previous = weeks[week - 1].first,
+              calendar.component(.month, from: first.day)
+                  != calendar.component(.month, from: previous.day)
+        else { return nil }
+        return first.day.formatted(.dateTime.month(.abbreviated))
     }
 
     private func heatColor(_ level: Int) -> Color {
